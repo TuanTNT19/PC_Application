@@ -1,99 +1,115 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <string.h>
-#include <errno.h>
+#include <signal.h>
 #include <sys/socket.h>      
 #include <netinet/in.h>     
 #include <arpa/inet.h>
-#include <signal.h>
-#include <unistd.h>
 
-int ser_id, cli_id;
-struct sockaddr_in ser_addr, cli_addr;
+int ser_fd;
+struct sockaddr_in ser_addr;
+int Pi_Port;
+char *Pi_IP;
 char *message;
-char *client_ip;
+char *temp_r;
+char *token;
+
+#define PR_ERR(str)  printf ("!!! Error in %s function\n", str)
 
 void sig_handler()
 {
     printf("========= QUICK TURN OFF ========\n");
-    close (ser_id);
-    close(cli_id);
     free (message);
-    free(client_ip);
+    free (Pi_IP);
+    free (temp_r);
+    close (ser_fd);
     exit(EXIT_SUCCESS);
 }
 
-int send_func(int fd, char *msg){
-    return write(fd, msg, strlen(msg));
-}
-
-int main(int argc, char *argv[]){
-    message = malloc(20);
-    client_ip = malloc(20);
-
-    printf ("=============== Start PC program =============\n");
+int main(){
+    Pi_IP = malloc(20);
+    message = malloc(50);
+    temp_r = malloc(3);
+    token = malloc(10);
+    socklen_t len = sizeof (struct sockaddr_in);
 
 // Signal Ctrl C register
     if (signal(SIGINT,sig_handler) == SIG_ERR)
     {
         printf("Can not handler SIGINT\n");
     }
+    
+    printf ("Enter the Pi4 server IP: ");
+    fflush(stdout);
+    fgets (Pi_IP, 20, stdin);
+    Pi_IP[strcspn(Pi_IP, "\n")] = '\0';
+    printf ("Enter the Pi4 server port: ");
+    fflush(stdout);
+    scanf ("%d", &Pi_Port);
+    getchar();
 
-    ser_id = socket(AF_INET , SOCK_STREAM, 0);
-
+    ser_fd = socket (AF_INET, SOCK_DGRAM, 0);
+    
+    if (ser_fd < 0){
+        PR_ERR ("socket");
+    }
+    
+    ser_addr.sin_port = htons (Pi_Port);
     ser_addr.sin_family = AF_INET;
-    ser_addr.sin_port = htons(atoi(argv[1]));
-    ser_addr.sin_addr.s_addr = INADDR_ANY;
+    inet_pton(AF_INET, Pi_IP, &ser_addr.sin_addr.s_addr);
 
-    bind(ser_id, (struct sockaddr *)&ser_addr, sizeof(ser_addr));
+    while(1){
+        printf ("Token to connect Pi4  server: ");
+        fflush(stdout);
+        fgets(token, sizeof(token), stdin);
+        token[strcspn(token, "\n")] = '\0';
+        if (sendto(ser_fd, token, 20, 0, (struct sockaddr *)&ser_addr, sizeof(struct sockaddr_in)) < 0){
+            PR_ERR ("sendto");
+        }
 
-    listen(ser_id, 5);
+        int n = recvfrom(ser_fd, temp_r, 3, 0, (struct sockaddr *)&ser_addr, &len);
+        if (n <= 0) {
+            PR_ERR("recvfrom");
+            continue;
+        }
+        temp_r[n] = '\0';
 
-    int len = sizeof(cli_addr);
-    int client_portnum;
-
-    while(1) {
-        cli_id = accept(ser_id, (struct sockaddr *)&cli_addr, &len);
-        inet_ntop(AF_INET, &cli_addr.sin_addr.s_addr, client_ip, 20);
-        client_portnum = ntohs(cli_addr.sin_port);
-
-        printf("=========== Connect from IP: %s, Port: %d ===========\n", client_ip, client_portnum);
-
-        while(1){
-            do {
-                printf(".. Message to Pi4: ..\n");
-                printf("....1. Led on\n");
-                printf("....0. Led off\n");
-                printf("....q. Quit Pi4 Program\n");
-                printf (".. Want to exit PC program --> Enter 'E'\n");
-                printf("Enter your chosen: ");
-                fflush(stdout);
-                fgets(message, 20, stdin);
-                if (message[0] != '1' && message[0] != '0' && message[0] != 'q' && message[0] != 'E'){
-                    printf(" === Invalid chosen !! Do again ===\n");
-                }
-            } while (message[0] != '1' && message[0] != '0' && message[0] != 'q' && message[0] != 'E');
-
-            if (message[0] == 'E'){
-                message[0] = 'q';
-                send_func (cli_id, message);
-                goto exit_program;
-            }
-
-            if (send_func (cli_id, message) < 0){
-                printf("=== ERROR===: Can not send message to Pi4\n");
-                sig_handler();
-                return -1;
-            }
+        if (!strncmp(temp_r, "1", 1)){
+            printf("***Connection successfully***\n");
+            free (token);
+            break;
+        }
+        else{
+            printf("!!! Can not connect to Pi4 server!!!\n");
+            printf("---> Enter Token Again ! \n");
         }
     }
 
-    exit_program: 
-        printf ("=============== Exit PC program =============\n");
-        close (ser_id);
-        close(cli_id);
-        free (message);
-        free(client_ip);
-    
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF);
+
+    while (1){
+        int line, col;
+        printf ("Line : ");
+        fflush(stdout);
+        scanf("%d", &line);
+        getchar();
+        printf ("Col : ");
+        fflush(stdout);
+        scanf("%d", &col);
+        getchar();
+        int n= sprintf(message, "%d %d ", line, col);
+        printf("Message Display: ");
+        fflush(stdout);
+        fgets(message +n , 50, stdin);
+        message[strcspn(message, "\n")] = '\0';
+        if (sendto(ser_fd, message, strlen(message), 0, (struct sockaddr *)&ser_addr, sizeof(struct sockaddr_in)) < 0){
+            PR_ERR ("sendto");
+        }
+    }
     return 0;
+
 }
+
